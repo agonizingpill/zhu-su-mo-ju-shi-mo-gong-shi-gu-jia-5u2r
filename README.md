@@ -17,6 +17,7 @@
 - 模具保养停机：计划→主管批准→保养完检；批准窗口同模具不得重叠。新开工核对停机时间、同模已有running实绩，批准停机也检查未完工试模，避免冲突。已完检保留停机历史，过去已签结数据不改。
 - 试模材料领耗：主管树脂批次入库，树脂状态available/quarantine；运行实绩按批次一次领料，锁库存，冻结单价；完工且未建结算可一次退余料，最多退领量。净耗成本=Σ((领kg−退kg)×单价快照)。所有新结算按台账取成本，拒绝任意覆盖；结算建立后领退料冻结。已signed历史数值保持，不补写旧凭据。
 - 客户交付验收：只从signed结算交样，样件数≤实绩good_shots；发样→客户签收→接受或整改→主管关闭。整改必须绑定原完工之后新一次同模具signed实绩，旧实绩或其他模具不能替代；重复签收/关闭拒绝。这里只留本地交接和客户意见，不发送外部消息。
+- 完工前订样（V4）：客户可在试模完工前下单。仅已签结实绩入训，按模具分组训练良品率下界（均值−zσ，默认z=1.645），组内留一交叉验证，单模具已签样本少于5条拒绝训练、订样单挂起。可承诺件数=min(需求, floor(计划射次×下界))，同试模并发订样累计不得超占。完工瞬间锁定订样名单：按承诺先后（单号建单顺序）用实际良品分货，先满足较早承诺，不足部分记缺口挂起；完工后禁止新增订样。结算签结后按分到的件数分批发样，同批次号重试幂等、不重复扣件，签收照常且拒绝重复签收。旧交付流程已发件数照常计入同一良品池，两条流互不能超占。页面可训练模型、订样、发样、签收并查缺口。
 
 ## 快速启动
 
@@ -33,7 +34,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 |---|---|---|---|
 |admin@ruimo.demo|Mould2026!|admin|全部读写、开放机时、最终承诺、超时完工与结算签结、保养批准、树脂入库/隔离、客户交付关闭|
 |estimator@ruimo.demo|Mould2026!|estimator|录入模具、建立修订估价、估算、申请机时；常规开工完工、保养计划/完检、领退料、客户签收/验收记录、结算草稿；不能承诺或签结|
-|viewer@ruimo.demo|Mould2026!|viewer|只读九业务页面与审计|
+|viewer@ruimo.demo|Mould2026!|viewer|只读十业务页面与审计|
 
 JWT 8 小时过期，密码 PBKDF2-SHA256 盐化存储。演示账号只用于本地，部署前修改 JWT_SECRET 和数据库演示口令。
 
@@ -53,6 +54,8 @@ JWT 8 小时过期，密码 PBKDF2-SHA256 盐化存储。演示账号只用于�
 
 V3：09:00 MD-115计划11月25日08:00—12:00顶针润滑与滑块检查，主管批准，完检记回位/模面结果；任何新开工不能回填到该窗口。10:00 RS-P20-DEMO树脂单价20元/kg，为运行试模领30kg；完工退5kg，库存净减25kg、净耗500元，结算材料成本只读500元。11:00签结后交10件样件给华远质量部，记录签收与验收；若卡扣装配需整改，必须再建同模新估单、承诺、开工完工、净耗结算signed后才能绑定关闭。
 
+V4：开工前在「完工前订样」对MD-42运行单QE-FLOOR-DEMO建两张订样单（计划100射次，下界约83%）：SO-261101承诺50件、SO-261102承诺30件，并发不超占；MD-77无已签实绩，SO-261199提交即挂起。实绩完工（如良品94）时名单自动锁定并按建单顺序分货，良品不足则后到的单记缺口；签结后对锁定单按批次发样，同批次号重复提交不二次扣件，登记客户签收；缺口看板同时列出分货缺口与样本不足挂起单。
+
 ## 算法口径与限制
 
 输入模腔数、滑块数、重量、钢材编码（P20=0、H13=1、S136=2）。PolynomialFeatures(degree=2, interaction_only=True) 生成原始项和交叉项，StandardScaler 按训练集拟合，Ridge(alpha=3) 回归实际试模工时，本单总预测工时另加准备工时。训练/验证分割固定 42，仅在训练集拟合模型和标准化器；MAE 是留出样本 mean(abs(actual-predicted))。样本少于30失败，预测基础工时下限0.5h。钢材是演示工艺序列编码，扩展无序材料时应改one-hot并重训。
@@ -60,6 +63,8 @@ V3：09:00 MD-115计划11月25日08:00—12:00顶针润滑与滑块检查，主�
 Redis worker结果持久化 Estimate.model_result，同时写 backend/worker 共享命名卷 `/artifacts/estimate-<id>.json`。worker 在取走作业后故障中断的自动重投尚未实现；生产化需可靠队列和恢复机制。时段是人工预算，未实现跨日物理日历或设备停机联动。小型项目没有删除、承诺撤销或财务对接。实际工时按开工/完工时间差计算，未填时区按上海解释，保存UTC。单次最长168h，材料成本由领退料台账计算，单价在领料时冻结；没有停机扣时、工资分摊和多次试模合并。完工实绩没有自动写入训练参考表，基准160条不被暗改。
 
 V3范围：保养时间和客户签收可按演示日期录入，无设备时钟联锁；同模具仅允许一份running实绩。每次试模对同树脂批次只领一次，不提供追加领料或多次退料；批次隔离后的退回库存仍保持隔离。客户样件数按good_shots上界，不另展开一射多腔件数。没有仓库外接、实际物流发送、客户门户或电子签章。
+
+V4范围与口径：良品率下界只取状态settled且结算signed的实绩，按模具分组；下界=clip(均值−zσ, 0.05, 1)，z默认1.645可在训练接口调整，组内留一验证仅报告覆盖率、不回改下界。样本阈值5条为演示口径，生产使用应按风险偏好重定。可承诺数按计划射次静态换算，不联动实际开机后的射次进度；完工锁定是唯一的实物分货时点，锁定后名单不可增删，挂起单在对应试模已完工后不会再被重评激活。发样批次号是幂等键（订样单+批次号唯一），重试返回原批次；签收只登记本地交接。良品池同时被订样预留/发样与旧交付流占用，任一侧超占都会被拒。
 
 ## 本地开发与结构
 
@@ -74,13 +79,15 @@ V3范围：保养时间和客户签收可按演示日期录入，无设备时钟
 
 V3 `backend/src/workshop_models.py`定义MaintenanceWindow、ResinLot、TrialMaterial、ReviewMaterialLedger、TrialDelivery；`workshop_schemas.py`校验时间、kg、客户记录，`workshop_service.py`负责停机/领耗/交付规则，`workshop_routes.py`提供`/maintenance-windows`、`/resin-lots`、`/trial-materials`、`/trial-deliveries`。原表列无新增，create_all非破坏性增加5张表；新结算另存材料快照凭据，不改旧signed记录。
 
+V4 `backend/src/booking_models.py`定义YieldModel、SampleOrder、SampleDispatch；`yield_ml.py`按模具分组训练良品率下界并做组内留一验证；`booking_service.py`管理挂起/承诺、并发超占、完工FIFO锁定与幂等发样；`booking_routes.py`暴露`/yield-models`、`/sample-orders`、`/sample-shortfalls`、`/sample-dispatches`。完工锁定由`execution_service.finish`在同一事务内触发；旧交付与订样发样共享同一良品池并对实绩行加锁。create_all非破坏性增加3张表，旧表不改。
+
 `backend/src/execution_models.py` 定义实绩/结算外键与唯一约束，`execution_schemas.py` 校验输入，`execution_service.py` 管理快照、工时与成本事务，`execution_routes.py` 暴露 `/executions`、`/cost-reviews` 及 finish/sign 操作。
 
-`frontend/src/pages/` 的 moulds/estimates/evidence/schedule/executions/reviews 及 maintenance/materials/deliveries 是九页；`api.js` HTTP；`store.js` 业务状态；`components/common.js` 状态标签/证据条/选择器跨页复用；`utils/format.js` 转义、金额/数字和表单工具。
+`frontend/src/pages/` 的 moulds/estimates/evidence/schedule/executions/reviews 及 maintenance/materials/deliveries/booking 是十页；`api.js` HTTP；`store.js` 业务状态；`components/common.js` 状态标签/证据条/选择器跨页复用；`utils/format.js` 转义、金额/数字和表单工具。
 
 本地 `pip install -r backend/requirements.txt`，设置 DATABASE_URL/REDIS_URL，在backend目录 `uvicorn src.main:app --reload`，另一终端 `python -m src.worker`。前端建议使用Compose Nginx代理。
 
-枚举位置：角色、估价状态、实绩状态、结算、保养、树脂、领料、交付状态与钢材定义在 `backend/src/constants.py` 和 `frontend/src/constants.js`；`GET /enums` 返回上述九组。钢材输入Literal在schemas.py、模型编码在ml.py。后端权限为真实约束，前端禁用按钮作提示。IntegrityError转成可恢复409。
+枚举位置：角色、估价状态、实绩状态、结算、保养、树脂、领料、交付、订样单与发样批次状态与钢材定义在 `backend/src/constants.py` 和 `frontend/src/constants.js`；`GET /enums` 返回上述十一组。钢材输入Literal在schemas.py、模型编码在ml.py。后端权限为真实约束，前端禁用按钮作提示。IntegrityError转成可恢复409。
 
 环境变量见 `.env.example`：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET、SEED_DEMO。`COMPOSE_SUBNET=10.221.23.0/24` 是本机默认地址池已满后的专用网段；冲突时改空闲网段。数据库、Redis、计算产物为命名卷。
 

@@ -70,9 +70,11 @@ def freeze_material_cost(s,review):
 def deliver(s,p,u):
     r=locked(s,CostReview,p.review_id)
     if r.status!='signed':raise HTTPException(409,'只有已签结算可交付试模样件')
-    x=item(s,TrialExecution,r.execution_id);e=item(s,Estimate,x.estimate_id)
-    if p.good_samples>x.good_shots:raise HTTPException(409,'交付样件不得超过实绩良品射次数')
     if s.scalar(select(TrialDelivery.id).where(TrialDelivery.review_id==r.id)):raise HTTPException(409,'该签结算已有交付，不可重复发样')
+    x=s.query(TrialExecution).filter_by(id=r.execution_id).with_for_update().one();e=item(s,Estimate,x.estimate_id)
+    from .booking_service import available_goods
+    free=available_goods(s,x)
+    if p.good_samples>free:raise HTTPException(409,f'交付 {p.good_samples} 件超过良品池余量 {free} 件（已含订样预留与历史发样）')
     snap={'review_id':r.id,'execution_id':x.id,'estimate_code':e.code,'mould_id':e.mould_id,'mould_code':x.snapshot['mould_code'],'good_shots':x.good_shots,'actual_hours':x.actual_hours,'material_cost':r.material_cost,'signed_by':r.signed_by,'ended_at':x.ended_at,'dispatched_at':datetime.now(timezone.utc).isoformat()}
     d=TrialDelivery(**p.model_dump(),snapshot=snap,state='dispatched');s.add(d);s.flush();record(s,u,'样件交付 '+e.code);return view(s,d)
 def receive_delivery(s,id,p,u):

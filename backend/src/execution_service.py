@@ -38,7 +38,10 @@ def finish(s,eid,data,u):
         if u.role!='admin':raise HTTPException(403,'超出已承诺机时，须车间负责人确认完工')
         if len(data.overtime_reason.strip())<8:raise HTTPException(409,'超时试模须填写至少8字的原因')
     x.ended_at=stamp(data.ended_at).isoformat();x.actual_hours=round(hours,4);x.good_shots=data.good_shots;x.total_shots=data.total_shots;x.overtime_reason=data.overtime_reason.strip();x.status='completed'
-    record(s,u,'试模完工 '+x.snapshot['estimate_code']);return x
+    record(s,u,'试模完工 '+x.snapshot['estimate_code'])
+    from .booking_service import lock_for_execution
+    lock_for_execution(s,x,u)
+    return x
 def amounts(x,material):
     actual=round(x.actual_hours*x.snapshot['rate']+material,2);quoted=x.snapshot['quoted_amount'];delta=round(x.actual_hours-x.snapshot['predicted_hours'],4)
     return dict(material_cost=material,actual_cost=actual,quoted_amount=quoted,variance_hours=delta,variance_pct=round(delta/x.snapshot['predicted_hours']*100,3),margin=round(quoted-actual,2))

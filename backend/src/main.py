@@ -12,7 +12,7 @@ from .auth import current,writers,admin,verify,token
 from .schemas import Login,MouldInput,EstimateInput,QuoteInput,SlotChoice,SlotInput
 from .services import item,serialize,record,require_edit,request_capacity,commit_capacity
 from .middlewares import RequestTrace,BurstGuard
-from .constants import ROLES,ESTIMATE_STATES,STEELS,EXECUTION_STATES,REVIEW_STATES,MAINTENANCE_STATES,RESIN_STATES,MATERIAL_STATES,DELIVERY_STATES
+from .constants import ROLES,ESTIMATE_STATES,STEELS,EXECUTION_STATES,REVIEW_STATES,MAINTENANCE_STATES,RESIN_STATES,MATERIAL_STATES,DELIVERY_STATES,SAMPLE_ORDER_STATES,SAMPLE_DISPATCH_STATES
 r=redis.Redis.from_url(os.environ['REDIS_URL'],decode_responses=True)
 @asynccontextmanager
 async def lifespan(app):
@@ -28,6 +28,8 @@ from .execution_routes import router as execution_router
 app.include_router(execution_router)
 from .workshop_routes import router as workshop_router
 app.include_router(workshop_router)
+from .booking_routes import router as booking_router
+app.include_router(booking_router)
 app.add_middleware(RequestTrace);app.add_middleware(BurstGuard)
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:18222'],allow_methods=['*'],allow_headers=['*'])
 @app.exception_handler(IntegrityError)
@@ -38,12 +40,16 @@ def health(s=Depends(db_session)):
 @app.post('/auth/login')
 def login(p:Login,s=Depends(db_session)):
     u=s.scalar(select(User).where(User.email==p.email))
-    if not u or not verify(p.password,u.password_hash):raise HTTPException(401,'邮箱或口令不正确')
+    try:
+        ok=u is not None and verify(p.password,u.password_hash)
+    except Exception:
+        ok=False
+    if not ok:raise HTTPException(401,'邮箱或口令不正确')
     return {'token':token(u),'user':{'email':u.email,'role':u.role}}
 @app.get('/me')
 def me(u=Depends(current)):return {'email':u.email,'role':u.role}
 @app.get('/enums')
-def enums(u=Depends(current)):return {'roles':ROLES,'estimate_states':ESTIMATE_STATES,'steels':STEELS,'execution_states':EXECUTION_STATES,'review_states':REVIEW_STATES,'maintenance_states':MAINTENANCE_STATES,'resin_states':RESIN_STATES,'material_states':MATERIAL_STATES,'delivery_states':DELIVERY_STATES}
+def enums(u=Depends(current)):return {'roles':ROLES,'estimate_states':ESTIMATE_STATES,'steels':STEELS,'execution_states':EXECUTION_STATES,'review_states':REVIEW_STATES,'maintenance_states':MAINTENANCE_STATES,'resin_states':RESIN_STATES,'material_states':MATERIAL_STATES,'delivery_states':DELIVERY_STATES,'sample_order_states':SAMPLE_ORDER_STATES,'sample_dispatch_states':SAMPLE_DISPATCH_STATES}
 @app.get('/moulds')
 def moulds(s=Depends(db_session),u=Depends(current)):return [serialize(x) for x in s.scalars(select(Mould).order_by(Mould.id))]
 @app.post('/moulds')
